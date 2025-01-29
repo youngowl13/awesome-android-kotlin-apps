@@ -1,0 +1,139 @@
+name: License Check
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  license-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20"
+
+      - name: Create directory and write Go code
+        run: |
+          mkdir -p license-checker
+          cd license-checker
+          # Add Go code to main.go
+          cat << 'EOF' > main.go
+          package main
+
+          import (
+              "encoding/json"
+              "fmt"
+              "io/fs"
+              "net/http"
+              "os"
+              "path/filepath"
+              "strings"
+          )
+
+          type Dependency struct {
+              Name    string
+              License string
+          }
+
+          var copyleftLicenses = []string{"GPL", "LGPL", "AGPL", "MPL", "EPL", "CC-BY-SA"}
+
+          func isCopyleftLicense(license string) bool {
+              license = strings.ToUpper(license)
+              for _, copyleft := range copyleftLicenses {
+                  if strings.Contains(license, copyleft) {
+                      return true
+                  }
+              }
+              return false
+          }
+
+          func fetchLicenseFromMavenCentral(group, artifact, version string) (string, error) {
+              url := fmt.Sprintf("https://repo1.maven.org/maven2/%s/%s/%s/%s-%s.pom",
+                  strings.ReplaceAll(group, ".", "/"), artifact, version, artifact, version)
+              resp, err := http.Get(url)
+              if err != nil {
+                  return "Unknown", err
+              }
+              defer resp.Body.Close()
+
+              if resp.StatusCode != 200 {
+                  return "Unknown", nil
+              }
+
+              var pom struct {
+                  Licenses []struct {
+                      Name string ` + "`xml:\"name\"`" + `
+                  } ` + "`xml:\"licenses>license\"`" + `
+              }
+              if err := json.NewDecoder(resp.Body).Decode(&pom); err != nil {
+                  return "Unknown", err
+              }
+              if len(pom.Licenses) > 0 {
+                  return pom.Licenses[0].Name, nil
+              }
+              return "Unknown", nil
+          }
+
+          func generateHTMLReport(dependencies []Dependency, outputFile string) error {
+              file, err := os.Create(outputFile)
+              if err != nil {
+                  return err
+              }
+              defer file.Close()
+
+              _, err = file.WriteString("<html><body><table>")
+              if err != nil {
+                  return err
+              }
+
+              for _, dep := range dependencies {
+                  class := "non-copyleft"
+                  if isCopyleftLicense(dep.License) {
+                      class = "copyleft"
+                  }
+                  row := fmt.Sprintf("<tr class='%s'><td>%s</td><td>%s</td></tr>", class, dep.Name, dep.License)
+                  _, err := file.WriteString(row)
+                  if err != nil {
+                      return err
+                  }
+              }
+
+              _, err = file.WriteString("</table></body></html>")
+              return err
+          }
+
+          func main() {
+              dependencies := []Dependency{
+                  {"com.squareup.retrofit2:retrofit:2.9.0", "Apache-2.0"},
+                  {"com.example:unknown:1.0.0", "Unknown"},
+              }
+
+              err := generateHTMLReport(dependencies, "dependency-report.html")
+              if err != nil {
+                  fmt.Fprintf(os.Stderr, "Error generating report: %v\n", err)
+                  os.Exit(1)
+              }
+              fmt.Println("Report generated: dependency-report.html")
+          }
+          EOF
+          # Initialize Go module and build binary
+          go mod init license-checker
+          go mod tidy
+          go build -o ../kotlin_checker
+
+      - name: Run License Checker
+        run: |
+          ./kotlin_checker
+
+      - name: Upload License Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-license-report
+          path: dependency-report.html
