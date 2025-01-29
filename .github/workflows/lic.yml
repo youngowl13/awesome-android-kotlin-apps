@@ -3,7 +3,7 @@ name: Dependency License Check
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
       - main
@@ -17,14 +17,14 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Setup Java (Compatible with Gradle)
+      # Step 2: Setup Java
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # Step 3: Download and Use Gradle Manually
+      # Step 3: Download and Install Gradle (Manual)
       - name: Download and Install Gradle
         run: |
           curl -sSLo gradle.zip https://services.gradle.org/distributions/gradle-7.5-all.zip
@@ -32,36 +32,44 @@ jobs:
           export PATH="$PWD/gradle-7.5/bin:$PATH"
           gradle --version
 
-      # Step 4: Upgrade Gradle Wrapper
+      # Step 4: Detect Deprecated Features
+      - name: Detect Deprecated Features
+        run: |
+          gradle help --warning-mode all || true
+          echo "Deprecation warnings detected. Refer to build/reports/problems/problems-report.html if available."
+
+      # Step 5: Upgrade Gradle Wrapper
       - name: Upgrade Gradle Wrapper
         run: |
           gradle wrapper --gradle-version 7.5 --distribution-type all
 
-      # Step 5: Commit Gradle Wrapper Changes
-      - name: Commit Upgraded Gradle Wrapper
+      # Step 6: Commit Upgraded Wrapper Files
+      - name: Commit Upgraded Wrapper
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
           commit_message: "Upgrade Gradle wrapper to 7.5"
           branch: ${{ github.ref_name }}
 
-      # Step 6: Generate Gradle License Report
-      - name: Generate Kotlin Dependency License Report
-        run: ./gradlew generateLicenseReport
+      # Step 7: Run Gradle Build and Generate License Report
+      - name: Run Gradle Build
+        run: |
+          ./gradlew clean build --warning-mode all
+          ./gradlew generateLicenseReport
 
-      # Step 7: Upload Kotlin Dependency License Report
-      - name: Upload Kotlin License Report
+      # Step 8: Upload License Reports
+      - name: Upload License Reports
         uses: actions/upload-artifact@v4
         with:
           name: kotlin-dependency-license-report
           path: build/reports/dependency-license/dependency-license.json
 
-      # Step 8: Setup Go Environment
+      # Step 9: Setup Go Environment
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.20'
 
-      # Step 9: Create and Build License Checker
+      # Step 10: Create and Build License Checker
       - name: Create and Build License Checker
         run: |
           mkdir -p license-checker
@@ -175,11 +183,11 @@ jobs:
           go mod tidy
           go build -o ../checker
 
-      # Step 10: Run License Checker
+      # Step 11: Run License Checker
       - name: Run License Checker
         run: ./checker
 
-      # Step 11: Upload HTML Report
+      # Step 12: Upload HTML Report
       - name: Upload Dependency License Report
         uses: actions/upload-artifact@v4
         with:
