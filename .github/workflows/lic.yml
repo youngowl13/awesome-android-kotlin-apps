@@ -24,7 +24,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # Step 3: Download and Install Gradle
+      # Step 3: Download and Use Gradle Manually
       - name: Download and Install Gradle
         run: |
           curl -sSLo gradle.zip https://services.gradle.org/distributions/gradle-7.5-all.zip
