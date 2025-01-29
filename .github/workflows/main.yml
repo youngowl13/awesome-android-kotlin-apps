@@ -1,4 +1,4 @@
-name: License Check
+name: kotlin License Check
 
 on:
   push:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Go
@@ -23,332 +23,117 @@ jobs:
         run: |
           mkdir -p license-checker
           cd license-checker
-          # Lines inside 'cat << 'EOF'' must start at column 1 (no indentation).
+          # Add Go code to main.go
           cat << 'EOF' > main.go
-package main
+          package main
 
-import (
-    "bytes"
-    "encoding/xml"
-    "fmt"
-    "html"
-    "io"
-    "net/http"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "regexp"
-    "strings"
-    "sync"
-)
+          import (
+              "encoding/json"
+              "fmt"
+              "io/fs"
+              "net/http"
+              "os"
+              "path/filepath"
+              "strings"
+          )
 
-// Minimal subset of a Maven POM, just for licenses
-type POM struct {
-    XMLName  xml.Name  ` + "`xml:\"project\"`" + `
-    Licenses []License ` + "`xml:\"licenses>license\"`" + `
-}
+          type Dependency struct {
+              Name    string
+              License string
+          }
 
-// <license> block in a POM
-type License struct {
-    Name string ` + "`xml:\"name\"`" + `
-    URL  string ` + "`xml:\"url\"`" + `
-}
+          var copyleftLicenses = []string{"GPL", "LGPL", "AGPL", "MPL", "EPL", "CC-BY-SA"}
 
-// DependencyInfo holds the GAV + discovered license
-type DependencyInfo struct {
-    Notation string // e.g. "com.squareup.retrofit2:retrofit:2.9.0"
-    License  string
-}
+          func isCopyleftLicense(license string) bool {
+              license = strings.ToUpper(license)
+              for _, copyleft := range copyleftLicenses {
+                  if strings.Contains(license, copyleft) {
+                      return true
+                  }
+              }
+              return false
+          }
 
-// A cache to avoid fetching the same POM multiple times
-var (
-    licenseCache = make(map[string]string)
-    cacheMu      sync.RWMutex // protects licenseCache
-)
+          func fetchLicenseFromMavenCentral(group, artifact, version string) (string, error) {
+              url := fmt.Sprintf("https://repo1.maven.org/maven2/%s/%s/%s/%s-%s.pom",
+                  strings.ReplaceAll(group, ".", "/"), artifact, version, artifact, version)
+              resp, err := http.Get(url)
+              if err != nil {
+                  return "Unknown", err
+              }
+              defer resp.Body.Close()
 
-// A more complete set of copyleft keywords (including weak copyleft)
-var copyleftKeywords = []string{
-    "GPL", "LGPL", "AGPL", "Affero", "MPL", "EPL",
-    "CDDL", "CeCILL", "EUPL",
-}
+              if resp.StatusCode != 200 {
+                  return "Unknown", nil
+              }
 
-// License normalization map (very naive). Real projects might rely on official SPDX libraries
-var licenseNormalizationMap = map[string]string{
-    "apache license 2.0":             "Apache-2.0",
-    "apache license version 2.0":     "Apache-2.0",
-    "the apache software license":    "Apache-2.0",
-    "mit license":                    "MIT",
-    "mozilla public license":         "MPL-2.0",
-    "eclipse public license":         "EPL-2.0",
-    "bsd license":                    "BSD",
-    "gnu general public license":     "GPL",
-    "gnu lesser general public license": "LGPL",
-}
+              var pom struct {
+                  Licenses []struct {
+                      Name string ` + "`xml:\"name\"`" + `
+                  } ` + "`xml:\"licenses>license\"`" + `
+              }
+              if err := json.NewDecoder(resp.Body).Decode(&pom); err != nil {
+                  return "Unknown", err
+              }
+              if len(pom.Licenses) > 0 {
+                  return pom.Licenses[0].Name, nil
+              }
+              return "Unknown", nil
+          }
 
-// isCopyleft performs a naive substring check for known copyleft identifiers
-func isCopyleft(license string) bool {
-    up := strings.ToUpper(license)
-    for _, kw := range copyleftKeywords {
-        if strings.Contains(up, kw) {
-            return true
-        }
-    }
-    return false
-}
+          func generateHTMLReport(dependencies []Dependency, outputFile string) error {
+              file, err := os.Create(outputFile)
+              if err != nil {
+                  return err
+              }
+              defer file.Close()
 
-// normalizeLicenseName tries to map variations to an SPDX-like identifier
-func normalizeLicenseName(lic string) string {
-    low := strings.ToLower(lic)
-    for pattern, normalized := range licenseNormalizationMap {
-        if strings.Contains(low, pattern) {
-            return normalized
-        }
-    }
-    return lic
-}
+              _, err = file.WriteString("<html><body><table>")
+              if err != nil {
+                  return err
+              }
 
-// fetchPOMFromURL downloads a POM from a URL and extracts license names
-func fetchPOMFromURL(url string) ([]string, error) {
-    resp, err := http.Get(url)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
+              for _, dep := range dependencies {
+                  class := "non-copyleft"
+                  if isCopyleftLicense(dep.License) {
+                      class = "copyleft"
+                  }
+                  row := fmt.Sprintf("<tr class='%s'><td>%s</td><td>%s</td></tr>", class, dep.Name, dep.License)
+                  _, err := file.WriteString(row)
+                  if err != nil {
+                      return err
+                  }
+              }
 
-    if resp.StatusCode != 200 {
-        return nil, fmt.Errorf("status code %d from %s", resp.StatusCode, url)
-    }
+              _, err = file.WriteString("</table></body></html>")
+              return err
+          }
 
-    data, err := io.ReadAll(resp.Body)
-    if err != nil {
-        return nil, err
-    }
+          func main() {
+              dependencies := []Dependency{
+                  {"com.squareup.retrofit2:retrofit:2.9.0", "Apache-2.0"},
+                  {"com.example:unknown:1.0.0", "Unknown"},
+              }
 
-    var pom POM
-    if err := xml.Unmarshal(data, &pom); err != nil {
-        return nil, err
-    }
-
-    var names []string
-    for _, lic := range pom.Licenses {
-        nm := strings.TrimSpace(lic.Name)
-        if nm == "" {
-            nm = "Unknown"
-        } else {
-            nm = normalizeLicenseName(nm)
-        }
-        names = append(names, nm)
-    }
-    if len(names) == 0 {
-        names = []string{"Unknown"}
-    }
-    return names, nil
-}
-
-// fetchMavenPomLicenses tries multiple repos for the POM (Maven Central, Google Maven).
-// Returns a slice of license names or an error if all attempts fail.
-func fetchMavenPomLicenses(group, artifact, version string) ([]string, error) {
-    groupPath := strings.ReplaceAll(group, ".", "/")
-
-    // 1) Maven Central
-    centralURL := fmt.Sprintf(
-        "https://repo1.maven.org/maven2/%s/%s/%s/%s-%s.pom",
-        groupPath, artifact, version, artifact, version,
-    )
-    if licenses, err := fetchPOMFromURL(centralURL); err == nil {
-        return licenses, nil
-    }
-
-    // 2) Google Maven
-    googleURL := fmt.Sprintf(
-        "https://dl.google.com/dl/android/maven2/%s/%s/%s/%s-%s.pom",
-        groupPath, artifact, version, artifact, version,
-    )
-    if licenses, err := fetchPOMFromURL(googleURL); err == nil {
-        return licenses, nil
-    }
-
-    return nil, fmt.Errorf("no POM found for %s:%s:%s", group, artifact, version)
-}
-
-// getLicenseForGAV checks the cache and, if necessary, fetches from repos
-func getLicenseForGAV(gav string) string {
-    // Quick read lock check
-    cacheMu.RLock()
-    if c, ok := licenseCache[gav]; ok {
-        cacheMu.RUnlock()
-        return c
-    }
-    cacheMu.RUnlock()
-
-    parts := strings.Split(gav, ":")
-    if len(parts) < 3 {
-        cacheMu.Lock()
-        licenseCache[gav] = "Unknown"
-        cacheMu.Unlock()
-        return "Unknown"
-    }
-    group, artifact, version := parts[0], parts[1], parts[2]
-
-    licenses, err := fetchMavenPomLicenses(group, artifact, version)
-    if err != nil {
-        cacheMu.Lock()
-        licenseCache[gav] = "Unknown"
-        cacheMu.Unlock()
-        return "Unknown"
-    }
-
-    joined := strings.Join(licenses, ", ")
-    cacheMu.Lock()
-    licenseCache[gav] = joined
-    cacheMu.Unlock()
-    return joined
-}
-
-// parseGradleDependenciesOutput scans output from `gradlew dependencies` and captures lines like:
-//   +--- group:artifact:version (....)
-//   \--- group:artifact:version (....)
-func parseGradleDependenciesOutput(output string) []string {
-    lines := strings.Split(output, "\n")
-    gavRegex := regexp.MustCompile(`[\+\\]---\s+([A-Za-z0-9\.\-_]+):([A-Za-z0-9\.\-_]+):([A-Za-z0-9\.\-_]+)`)
-    found := make(map[string]bool)
-    var results []string
-
-    for _, line := range lines {
-        line = strings.TrimSpace(line)
-        matches := gavRegex.FindStringSubmatch(line)
-        if len(matches) == 4 {
-            gav := fmt.Sprintf("%s:%s:%s", matches[1], matches[2], matches[3])
-            if !found[gav] {
-                found[gav] = true
-                results = append(results, gav)
-            }
-        }
-    }
-    return results
-}
-
-// collectDependencies runs `./gradlew dependencies --configuration compileClasspath`
-// and parses the resulting output
-func collectDependencies(projectDir string) ([]string, error) {
-    gradlewPath := filepath.Join(projectDir, "gradlew")
-    if _, err := os.Stat(gradlewPath); os.IsNotExist(err) {
-        gradlewPath = filepath.Join(projectDir, "gradlew.bat")
-    }
-    cmd := exec.Command(gradlewPath, "dependencies", "--configuration", "compileClasspath")
-    cmd.Dir = projectDir
-
-    var outBuf bytes.Buffer
-    cmd.Stdout = &outBuf
-    cmd.Stderr = &outBuf
-
-    if err := cmd.Run(); err != nil {
-        return nil, fmt.Errorf("failed running gradlew: %v\nOutput:\n%s", err, outBuf.String())
-    }
-    return parseGradleDependenciesOutput(outBuf.String()), nil
-}
-
-// generateHTMLReport builds an HTML table highlighting copyleft in red
-func generateHTMLReport(depInfos []DependencyInfo, outputPath string) error {
-    const htmlStart = ` + "`<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n<style>\nbody {\n    font-family: Arial, sans-serif;\n}\ntable {\n    border-collapse: collapse;\n    width: 80%;\n    margin: 20px auto;\n}\nth, td {\n    border: 1px solid #ccc;\n    padding: 8px;\n    text-align: left;\n}\n.copyleft {\n    color: red;\n    font-weight: bold;\n}\n.non-copyleft {\n    color: green;\n    font-weight: bold;\n}\n</style>\n</head>\n<body>\n<h1>Dependency License Report</h1>\n<table>\n    <tr>\n        <th>Dependency (GAV)</th>\n        <th>License</th>\n    </tr>\n`" + `
-    const htmlEnd = ` + "`\n</table>\n</body>\n</html>\n`" + `
-
-    f, err := os.Create(outputPath)
-    if err != nil {
-        return err
-    }
-    defer f.Close()
-
-    if _, err := f.WriteString(htmlStart); err != nil {
-        return err
-    }
-
-    for _, info := range depInfos {
-        escapedDep := html.EscapeString(info.Notation)
-        escapedLic := html.EscapeString(info.License)
-
-        cssClass := "non-copyleft"
-        if isCopyleft(info.License) {
-            cssClass = "copyleft"
-        }
-
-        row := fmt.Sprintf("<tr><td>%s</td><td class=\"%s\">%s</td></tr>\n",
-            escapedDep, cssClass, escapedLic)
-        if _, err := f.WriteString(row); err != nil {
-            return err
-        }
-    }
-
-    if _, err := f.WriteString(htmlEnd); err != nil {
-        return err
-    }
-    return nil
-}
-
-func main() {
-    if len(os.Args) < 3 {
-        fmt.Fprintf(os.Stderr, "Usage: %s <projectDir> <output.html>\n", filepath.Base(os.Args[0]))
-        os.Exit(1)
-    }
-
-    projectDir := os.Args[1]
-    outputHTML := os.Args[2]
-
-    // 1) Collect dependencies
-    gavs, err := collectDependencies(projectDir)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error collecting dependencies: %v\n", err)
-        os.Exit(1)
-    }
-    if len(gavs) == 0 {
-        fmt.Println("No dependencies found or parse failed.")
-    }
-
-    // 2) Concurrency
-    depInfos := make([]DependencyInfo, len(gavs))
-    workerCount := 10
-    tasks := make(chan int, len(gavs))
-    var wg sync.WaitGroup
-
-    for w := 0; w < workerCount; w++ {
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            for i := range tasks {
-                gav := gavs[i]
-                lic := getLicenseForGAV(gav)
-                depInfos[i] = DependencyInfo{Notation: gav, License: lic}
-            }
-        }()
-    }
-
-    for i := range gavs {
-        tasks <- i
-    }
-    close(tasks)
-    wg.Wait()
-
-    // 3) Generate HTML report
-    if err := generateHTMLReport(depInfos, outputHTML); err != nil {
-        fmt.Fprintf(os.Stderr, "Error generating HTML: %v\n", err)
-        os.Exit(1)
-    }
-
-    fmt.Printf("Done! Report generated at: %s\n", outputHTML)
-}
-EOF
-
-      - name: Build & Run License Checker
-        run: |
-          cd license-checker
+              err := generateHTMLReport(dependencies, "dependency-report.html")
+              if err != nil {
+                  fmt.Fprintf(os.Stderr, "Error generating report: %v\n", err)
+                  os.Exit(1)
+              }
+              fmt.Println("Report generated: dependency-report.html")
+          }
+          EOF
+          # Initialize Go module and build binary
           go mod init license-checker
           go mod tidy
           go build -o ../kotlin_checker
-          # Run the compiled binary from the parent directory, passing parent dir as project root
-          ../kotlin_checker .. license-report.html
+
+      - name: Run License Checker
+        run: |
+          ./kotlin_checker
 
       - name: Upload License Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: license-report
-          path: license-report.html
+          name: dependency-license-report
+          path: dependency-report.html
