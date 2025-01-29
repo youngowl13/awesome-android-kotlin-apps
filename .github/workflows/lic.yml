@@ -2,442 +2,157 @@ name: Dependency License Check
 
 on:
   push:
-    branches: [ "master" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
   license-check:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Check out your repository
+      # Step 1: Checkout Repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Set up Go environment
+      # Step 2: Setup Java (Required for Gradle)
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # Step 3: Setup Gradle
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v2
+
+      # Step 4: Run Gradle License Report
+      - name: Generate Kotlin Dependency License Report
+        run: ./gradlew generateLicenseReport
+
+      # Step 5: Upload Kotlin Dependency License Report
+      - name: Upload Kotlin License Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-dependency-license-report
+          path: build/reports/dependency-license/dependency-license.json
+
+      # Step 6: Setup Go Environment
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.20'
 
-      # Step 3: Create and Build License Checker
+      # Step 7: Create and Build License Checker
       - name: Create and Build License Checker
         run: |
           mkdir -p license-checker
           cd license-checker
-          # Write out the combined Go script:
           cat << 'EOF' > main.go
           package main
 
           import (
-            "bytes"
-            "encoding/json"
-            "encoding/xml"
-            "fmt"
-            "html"
-            "io/fs"
-            "net/http"
-            "os"
-            "os/exec"
-            "path/filepath"
-            "regexp"
-            "strings"
+              "encoding/json"
+              "fmt"
+              "net/http"
+              "os"
+              "strings"
           )
 
-          // Dependency is our unified struct for Node, Python, Gradle.
-          // We store package or group/artifact in Name, the license, a details URL, and Copyleft flag.
           type Dependency struct {
-            Name     string
-            License  string
-            Details  string
-            Copyleft bool
-          }
-
-          // We'll unify the Node, Python, Gradle items in arrays
-          var copyleftLicenses = []string{
-            "GPL", "LGPL", "AGPL", "MPL", "CC-BY-SA", "EPL", "OFL",
-            "CPL", "OSL", "APL", "AFFERO", "MOZILLA", "CDDL",
-          }
-
-          // check if a license string is considered copyleft
-          func isCopyleftLicense(license string) bool {
-            upper := strings.ToUpper(license)
-            for _, c := range copyleftLicenses {
-              if strings.Contains(upper, c) {
-                return true
-              }
-            }
-            return false
+              Name     string
+              License  string
+              Details  string
+              Copyleft bool
           }
 
           func main() {
-            // 1) Locate any package.json, requirements.txt, and a Gradle wrapper (for Kotlin/Android)
-            nodeFile := findFile(".", "package.json")
-            pythonFile := findFile(".", "requirements.txt")
-            if pythonFile == "" {
-              // user might have "requirement.txt" or "requirements_dev.txt", etc.
-              pythonFile = findFile(".", "requirement.txt")
-            }
-            gradleWrapper := findFile(".", "gradlew") // indicates an Android/Java project
+              // Parse Kotlin dependencies from JSON report
+              kotlinDeps := parseKotlinDependencies("build/reports/dependency-license/dependency-license.json")
 
-            // 2) Parse each type
-            nodeDeps := parseNodeDependencies(nodeFile)
-            pythonDeps := parsePythonDependencies(pythonFile)
-            gradleDeps := parseGradleDependencies(gradleWrapper)
-
-            // 3) Generate an HTML report from all three categories
-            generateHTMLReport(nodeDeps, pythonDeps, gradleDeps)
-            fmt.Println("Dependency license report generated: dependency-license-report.html")
+              // Generate HTML report
+              generateHTMLReport(kotlinDeps)
+              fmt.Println("Dependency license report generated: dependency-license-report.html")
           }
 
-          // findFile walks the directory tree from 'root' to find the first file matching 'target'
-          func findFile(root, target string) string {
-            var found string
-            filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+          func parseKotlinDependencies(filePath string) []Dependency {
+              file, err := os.ReadFile(filePath)
               if err != nil {
-                return nil
-              }
-              if d.Name() == target {
-                found = path
-                // Skip further walking once found
-                return filepath.SkipDir
-              }
-              return nil
-            })
-            return found
-          }
-
-          // -----------------------
-          //  NODE.JS DEPENDENCIES
-          // -----------------------
-          func parseNodeDependencies(filePath string) []Dependency {
-            if filePath == "" {
-              fmt.Println("No Node.js (package.json) found.")
-              return nil
-            }
-
-            var result []Dependency
-            file, err := os.ReadFile(filePath)
-            if err != nil {
-              fmt.Println("Error reading package.json:", err)
-              return nil
-            }
-
-            var data map[string]interface{}
-            if err := json.Unmarshal(file, &data); err != nil {
-              fmt.Println("Error parsing package.json:", err)
-              return nil
-            }
-
-            // "dependencies" block
-            deps, ok := data["dependencies"].(map[string]interface{})
-            if !ok {
-              fmt.Println("No dependencies found in package.json.")
-              return nil
-            }
-
-            // For each dependency name, query the NPM registry for license info
-            for name := range deps {
-              license, details := fetchNodeLicense(name)
-              result = append(result, Dependency{
-                Name:     name,
-                License:  license,
-                Details:  details,
-                Copyleft: isCopyleftLicense(license),
-              })
-            }
-            return result
-          }
-
-          // fetchNodeLicense calls https://registry.npmjs.org/<pkgName> to gather the license
-          func fetchNodeLicense(pkgName string) (string, string) {
-            url := fmt.Sprintf("https://registry.npmjs.org/%s", pkgName)
-            resp, err := http.Get(url)
-            if err != nil {
-              return "Unknown", url
-            }
-            defer resp.Body.Close()
-
-            var data map[string]interface{}
-            json.NewDecoder(resp.Body).Decode(&data)
-
-            distTags, ok := data["dist-tags"].(map[string]interface{})
-            if !ok {
-              return "Unknown", url
-            }
-
-            latestTag, ok := distTags["latest"].(string)
-            if !ok {
-              return "Unknown", url
-            }
-
-            versions, ok := data["versions"].(map[string]interface{})
-            if !ok {
-              return "Unknown", url
-            }
-
-            versionData, ok := versions[latestTag].(map[string]interface{})
-            if !ok {
-              return "Unknown", url
-            }
-
-            // license can be a string or an object in newer package.json
-            switch lic := versionData["license"].(type) {
-            case string:
-              return lic, fmt.Sprintf("https://www.npmjs.com/package/%s", pkgName)
-            case map[string]interface{}:
-              // some packages do: "license": { "type": "MIT", "url": "..." }
-              if t, ok := lic["type"].(string); ok {
-                return t, fmt.Sprintf("https://www.npmjs.com/package/%s", pkgName)
-              }
-              // fallback
-              return "Unknown", fmt.Sprintf("https://www.npmjs.com/package/%s", pkgName)
-            default:
-              return "Unknown", fmt.Sprintf("https://www.npmjs.com/package/%s", pkgName)
-            }
-          }
-
-          // -----------------------
-          //  PYTHON DEPENDENCIES
-          // -----------------------
-          func parsePythonDependencies(filePath string) []Dependency {
-            if filePath == "" {
-              fmt.Println("No Python requirements.txt found.")
-              return nil
-            }
-
-            var result []Dependency
-            content, err := os.ReadFile(filePath)
-            if err != nil {
-              fmt.Println("Error reading requirements.txt:", err)
-              return nil
-            }
-
-            lines := strings.Split(string(content), "\n")
-            for _, line := range lines {
-              line = strings.TrimSpace(line)
-              if line == "" || strings.HasPrefix(line, "#") {
-                continue
+                  fmt.Println("Error reading Gradle license report:", err)
+                  return nil
               }
 
-              // often lines are "package==1.2.3", so parse the package name
-              pkg := strings.Split(line, "==")[0]
-              if pkg == "" {
-                continue
-              }
+              var data []map[string]interface{}
+              json.Unmarshal(file, &data)
 
-              license, details := fetchPythonLicense(pkg)
-              result = append(result, Dependency{
-                Name:     pkg,
-                License:  license,
-                Details:  details,
-                Copyleft: isCopyleftLicense(license),
-              })
-            }
-            return result
-          }
-
-          // fetchPythonLicense calls https://pypi.org/pypi/<pkgName>/json
-          func fetchPythonLicense(pkgName string) (string, string) {
-            url := fmt.Sprintf("https://pypi.org/pypi/%s/json", pkgName)
-            resp, err := http.Get(url)
-            if err != nil {
-              return "Unknown", url
-            }
-            defer resp.Body.Close()
-
-            var data map[string]interface{}
-            json.NewDecoder(resp.Body).Decode(&data)
-
-            info, ok := data["info"].(map[string]interface{})
-            if !ok {
-              return "Unknown", url
-            }
-
-            lic, _ := info["license"].(string)
-            if lic == "" {
-              // Try classifiers for license info
-              classif, ok := info["classifiers"].([]interface{})
-              if ok {
-                for _, c := range classif {
-                  cs := fmt.Sprintf("%v", c)
-                  if strings.Contains(cs, "License") {
-                    lic = cs
-                    break
+              var result []Dependency
+              for _, dep := range data {
+                  name, _ := dep["moduleName"].(string)
+                  licenses, _ := dep["moduleLicense"].([]interface{})
+                  license := "Unknown"
+                  if len(licenses) > 0 {
+                      license = fmt.Sprintf("%v", licenses[0])
                   }
-                }
+
+                  result = append(result, Dependency{
+                      Name:    name,
+                      License: license,
+                      Details: fmt.Sprintf("https://mvnrepository.com/artifact/%s", name),
+                      Copyleft: isCopyleftLicense(license),
+                  })
               }
-            }
-            if lic == "" {
-              lic = "Unknown"
-            }
-            return lic, url
+              return result
           }
 
-          // -----------------------
-          //  GRADLE (Kotlin/Java) DEPENDENCIES
-          // -----------------------
-          // We'll parse 'gradlew dependencies' output to find group:artifact:version lines,
-          // then fetch each artifact's license from Maven Central.
-          func parseGradleDependencies(gradleWrapper string) []Dependency {
-            if gradleWrapper == "" {
-              fmt.Println("No Gradle wrapper found. Skipping Kotlin/Java license check.")
-              return nil
-            }
-
-            // 1) run "./gradlew dependencies --configuration runtimeClasspath"
-            cmd := exec.Command("./gradlew", "dependencies", "--configuration", "runtimeClasspath")
-            out, err := cmd.CombinedOutput()
-            if err != nil {
-              fmt.Printf("Error running gradlew dependencies: %v\nOutput:\n%s\n", err, string(out))
-              return nil
-            }
-
-            // 2) scrape lines of form: group:artifact:version
-            re := regexp.MustCompile(`(?m)(?:\\+---|\\\\---)\\s+([^:]+):([^:]+):([^ \\t]+)`)
-            matches := re.FindAllStringSubmatch(string(out), -1)
-            if len(matches) == 0 {
-              fmt.Println("No Gradle dependencies found in runtimeClasspath.")
-              return nil
-            }
-
-            var results []Dependency
-            for _, match := range matches {
-              if len(match) == 4 {
-                g, a, v := match[1], match[2], match[3]
-                license, details := fetchMavenLicense(g, a, v)
-                results = append(results, Dependency{
-                  Name:     g + ":" + a + ":" + v,
-                  License:  license,
-                  Details:  details,
-                  Copyleft: isCopyleftLicense(license),
-                })
+          func isCopyleftLicense(license string) bool {
+              copyleftLicenses := []string{"GPL", "LGPL", "AGPL", "MPL", "CC-BY-SA", "EPL", "OFL", "CPL", "OSL", "APL"}
+              license = strings.ToUpper(license)
+              for _, copyleft := range copyleftLicenses {
+                  if strings.Contains(license, copyleft) {
+                      return true
+                  }
               }
-            }
-            return results
+              return false
           }
 
-          // Minimal POM structure
-          type projectPOM struct {
-            XMLName  xml.Name  ` + "`" + `xml:"project"` + "`" + `
-            Licenses []struct {
-              Name string ` + "`" + `xml:"name"` + "`" + `
-            } ` + "`" + `xml:"licenses>license"` + "`" + `
-          }
+          func generateHTMLReport(dependencies []Dependency) {
+              htmlContent := ` +
+                  "`<!DOCTYPE html>\n<html>\n<head>\n<title>Dependency License Report</title>\n<style>\ntable { width: 100%; border-collapse: collapse; }\nth, td { border: 1px solid #ddd; padding: 8px; }\nth { background-color: #f2f2f2; }\n.copyleft { background-color: #f8d7da; color: #721c24; }\n.non-copyleft { background-color: #d4edda; color: #155724; }\n</style>\n</head>\n<body>\n<h1>Dependency License Report</h1>\n<table>\n<tr><th>Package</th><th>License</th><th>Details</th></tr>`" +
+                  " + generateTable(dependencies) + " +
+                  "`</table>\n</body>\n</html>`"
 
-          // fetchMavenLicense builds a Maven Central URL for the POM and extracts <license> info
-          func fetchMavenLicense(group, artifact, version string) (string, string) {
-            base := "https://repo1.maven.org/maven2"
-            pomURL := fmt.Sprintf("%s/%s/%s/%s/%s-%s.pom",
-              base,
-              strings.ReplaceAll(group, ".", "/"),
-              strings.ReplaceAll(artifact, ".", "/"),
-              version,
-              artifact,
-              version,
-            )
-
-            resp, err := http.Get(pomURL)
-            if err != nil {
-              return "Unknown", pomURL
-            }
-            defer resp.Body.Close()
-
-            if resp.StatusCode != 200 {
-              return "Unknown", pomURL
-            }
-
-            var p projectPOM
-            if err := xml.NewDecoder(resp.Body).Decode(&p); err != nil {
-              return "Unknown", pomURL
-            }
-
-            // join multiple licenses with ;
-            var lic []string
-            for _, l := range p.Licenses {
-              lic = append(lic, l.Name)
-            }
-            joined := strings.Join(lic, "; ")
-            if joined == "" {
-              joined = "Unknown"
-            }
-            return joined, pomURL
-          }
-
-          // -----------------------
-          //  Generate Final Report
-          // -----------------------
-          func generateHTMLReport(nodeDeps, pythonDeps, gradleDeps []Dependency) {
-            htmlContent := `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Dependency License Report</title>
-                <style>
-                    table { width: 100%; border-collapse: collapse; }
-                    th, td { border: 1px solid #ddd; padding: 8px; }
-                    th { background-color: #f2f2f2; }
-                    .copyleft { background-color: #f8d7da; color: #721c24; }
-                    .non-copyleft { background-color: #d4edda; color: #155724; }
-                </style>
-            </head>
-            <body>
-                <h1>Dependency License Report</h1>
-                <h2>Node.js Dependencies</h2>` +
-                generateTable(nodeDeps) +
-                `<h2>Python Dependencies</h2>` +
-                generateTable(pythonDeps) +
-                `<h2>Gradle (Kotlin/Java) Dependencies</h2>` +
-                generateTable(gradleDeps) +
-                `</body>
-            </html>`
-
-            os.WriteFile("dependency-license-report.html", []byte(htmlContent), 0644)
+              os.WriteFile("dependency-license-report.html", []byte(htmlContent), 0644)
           }
 
           func generateTable(dependencies []Dependency) string {
-            if len(dependencies) == 0 {
-              return "<p>No dependencies found.</p>"
-            }
-
-            table := `<table>
-            <tr>
-                <th>Dependency</th>
-                <th>License</th>
-                <th>Details</th>
-            </tr>`
-
-            for _, dep := range dependencies {
-              rowClass := "non-copyleft"
-              if dep.Copyleft {
-                rowClass = "copyleft"
+              if len(dependencies) == 0 {
+                  return "<p>No dependencies found.</p>"
               }
-              safeLicense := html.EscapeString(dep.License)
-              table += fmt.Sprintf(`<tr class="%s">
-                  <td>%s</td>
-                  <td>%s</td>
-                  <td><a href="%s" target="_blank">Link</a></td>
-              </tr>`, rowClass, dep.Name, safeLicense, dep.Details)
-            }
 
-            table += "</table>"
-            return table
+              table := ""
+              for _, dep := range dependencies {
+                  class := "non-copyleft"
+                  if dep.Copyleft {
+                      class = "copyleft"
+                  }
+                  table += fmt.Sprintf(`<tr class="%s"><td>%s</td><td>%s</td><td><a href="%s" target="_blank">View Details</a></td></tr>`, class, dep.Name, dep.License, dep.Details)
+              }
+              return table
           }
           EOF
 
-          # Initialize a tiny Go module so 'go build' works
           go mod init license-checker
           go mod tidy
-          # Build the tool as binary "../checker"
           go build -o ../checker
 
-      # Step 4: Run License Checker
+      # Step 8: Run License Checker
       - name: Run License Checker
         run: ./checker
 
-      # Step 5: Upload HTML Report
-      - name: Upload License Report
+      # Step 9: Upload HTML Report
+      - name: Upload Dependency License Report
         uses: actions/upload-artifact@v4
         with:
           name: dependency-license-report
