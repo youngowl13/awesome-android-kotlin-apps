@@ -23,7 +23,6 @@ jobs:
         run: |
           mkdir -p license-checker
           cd license-checker
-          # Write Go code to main.go
           cat << 'EOF' > main.go
           package main
 
@@ -88,7 +87,6 @@ jobs:
               }
           }
           EOF
-          # Initialize Go module and build the binary
           go mod init license-checker
           go mod tidy
           go build -o ../kotlin_checker
