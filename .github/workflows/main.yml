@@ -1,5 +1,4 @@
 name: kotlin License Check
-
 on:
   push:
     branches: ["main"]
