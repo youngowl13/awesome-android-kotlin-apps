@@ -24,29 +24,36 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # Step 3: Setup Gradle Wrapper
+      # Step 3: Upgrade Gradle Wrapper
       - name: Upgrade Gradle Wrapper
         run: |
-          ./gradlew wrapper --gradle-version 7.5
+          ./gradlew wrapper --gradle-version 7.5 --distribution-type all
 
-      # Step 4: Run Gradle License Report
+      # Step 4: Commit Gradle Wrapper Changes
+      - name: Commit Upgraded Gradle Wrapper
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Upgrade Gradle wrapper to 7.5"
+          branch: ${{ github.ref_name }}
+
+      # Step 5: Generate Gradle License Report
       - name: Generate Kotlin Dependency License Report
         run: ./gradlew generateLicenseReport
 
-      # Step 5: Upload Kotlin Dependency License Report
+      # Step 6: Upload Kotlin Dependency License Report
       - name: Upload Kotlin License Report
         uses: actions/upload-artifact@v4
         with:
           name: kotlin-dependency-license-report
           path: build/reports/dependency-license/dependency-license.json
 
-      # Step 6: Setup Go Environment
+      # Step 7: Setup Go Environment
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.20'
 
-      # Step 7: Create and Build License Checker
+      # Step 8: Create and Build License Checker
       - name: Create and Build License Checker
         run: |
           mkdir -p license-checker
@@ -57,7 +64,6 @@ jobs:
           import (
               "encoding/json"
               "fmt"
-              "net/http"
               "os"
               "strings"
           )
@@ -70,10 +76,7 @@ jobs:
           }
 
           func main() {
-              // Parse Kotlin dependencies from JSON report
               kotlinDeps := parseKotlinDependencies("build/reports/dependency-license/dependency-license.json")
-
-              // Generate HTML report
               generateHTMLReport(kotlinDeps)
               fmt.Println("Dependency license report generated: dependency-license-report.html")
           }
@@ -119,11 +122,27 @@ jobs:
           }
 
           func generateHTMLReport(dependencies []Dependency) {
-              htmlContent := ` +
-                  "`<!DOCTYPE html>\n<html>\n<head>\n<title>Dependency License Report</title>\n<style>\ntable { width: 100%; border-collapse: collapse; }\nth, td { border: 1px solid #ddd; padding: 8px; }\nth { background-color: #f2f2f2; }\n.copyleft { background-color: #f8d7da; color: #721c24; }\n.non-copyleft { background-color: #d4edda; color: #155724; }\n</style>\n</head>\n<body>\n<h1>Dependency License Report</h1>\n<table>\n<tr><th>Package</th><th>License</th><th>Details</th></tr>`" +
-                  " + generateTable(dependencies) + " +
-                  "`</table>\n</body>\n</html>`"
-
+              htmlContent := `
+              <!DOCTYPE html>
+              <html>
+              <head>
+                  <title>Dependency License Report</title>
+                  <style>
+                      table { width: 100%; border-collapse: collapse; }
+                      th, td { border: 1px solid #ddd; padding: 8px; }
+                      th { background-color: #f2f2f2; }
+                      .copyleft { background-color: #f8d7da; color: #721c24; }
+                      .non-copyleft { background-color: #d4edda; color: #155724; }
+                  </style>
+              </head>
+              <body>
+                  <h1>Dependency License Report</h1>
+                  <table>
+                      <tr><th>Package</th><th>License</th><th>Details</th></tr>` +
+                  generateTable(dependencies) +
+                  `</table>
+              </body>
+              </html>`
               os.WriteFile("dependency-license-report.html", []byte(htmlContent), 0644)
           }
 
@@ -148,11 +167,11 @@ jobs:
           go mod tidy
           go build -o ../checker
 
-      # Step 8: Run License Checker
+      # Step 9: Run License Checker
       - name: Run License Checker
         run: ./checker
 
-      # Step 9: Upload HTML Report
+      # Step 10: Upload HTML Report
       - name: Upload Dependency License Report
         uses: actions/upload-artifact@v4
         with:
