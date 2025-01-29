@@ -24,36 +24,44 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # Step 3: Upgrade Gradle Wrapper
+      # Step 3: Download and Install Gradle
+      - name: Download and Install Gradle
+        run: |
+          curl -sSLo gradle.zip https://services.gradle.org/distributions/gradle-7.5-all.zip
+          unzip -q gradle.zip
+          export PATH="$PWD/gradle-7.5/bin:$PATH"
+          gradle --version
+
+      # Step 4: Upgrade Gradle Wrapper
       - name: Upgrade Gradle Wrapper
         run: |
-          ./gradlew wrapper --gradle-version 7.5 --distribution-type all
+          gradle wrapper --gradle-version 7.5 --distribution-type all
 
-      # Step 4: Commit Gradle Wrapper Changes
+      # Step 5: Commit Gradle Wrapper Changes
       - name: Commit Upgraded Gradle Wrapper
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
           commit_message: "Upgrade Gradle wrapper to 7.5"
           branch: ${{ github.ref_name }}
 
-      # Step 5: Generate Gradle License Report
+      # Step 6: Generate Gradle License Report
       - name: Generate Kotlin Dependency License Report
         run: ./gradlew generateLicenseReport
 
-      # Step 6: Upload Kotlin Dependency License Report
+      # Step 7: Upload Kotlin Dependency License Report
       - name: Upload Kotlin License Report
         uses: actions/upload-artifact@v4
         with:
           name: kotlin-dependency-license-report
           path: build/reports/dependency-license/dependency-license.json
 
-      # Step 7: Setup Go Environment
+      # Step 8: Setup Go Environment
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.20'
 
-      # Step 8: Create and Build License Checker
+      # Step 9: Create and Build License Checker
       - name: Create and Build License Checker
         run: |
           mkdir -p license-checker
@@ -167,11 +175,11 @@ jobs:
           go mod tidy
           go build -o ../checker
 
-      # Step 9: Run License Checker
+      # Step 10: Run License Checker
       - name: Run License Checker
         run: ./checker
 
-      # Step 10: Upload HTML Report
+      # Step 11: Upload HTML Report
       - name: Upload Dependency License Report
         uses: actions/upload-artifact@v4
         with:
