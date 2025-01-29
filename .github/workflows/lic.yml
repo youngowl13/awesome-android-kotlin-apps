@@ -23,38 +23,27 @@ jobs:
         run: |
           mkdir -p license-checker
           cd license-checker
-          # Add Go code to main.go
+          # Write Go code to main.go
           cat << 'EOF' > main.go
           package main
 
           import (
-              "encoding/json"
+              "encoding/xml"
               "fmt"
-              "io/fs"
-              "net/http"
               "os"
-              "path/filepath"
+              "net/http"
               "strings"
           )
 
-          type Dependency struct {
-              Name    string
-              License string
+          type License struct {
+              Name string ` + "`xml:\"name\"`" + `
           }
 
-          var copyleftLicenses = []string{"GPL", "LGPL", "AGPL", "MPL", "EPL", "CC-BY-SA"}
-
-          func isCopyleftLicense(license string) bool {
-              license = strings.ToUpper(license)
-              for _, copyleft := range copyleftLicenses {
-                  if strings.Contains(license, copyleft) {
-                      return true
-                  }
-              }
-              return false
+          type POM struct {
+              Licenses []License ` + "`xml:\"licenses>license\"`" + `
           }
 
-          func fetchLicenseFromMavenCentral(group, artifact, version string) (string, error) {
+          func fetchLicenseFromMaven(group, artifact, version string) (string, error) {
               url := fmt.Sprintf("https://repo1.maven.org/maven2/%s/%s/%s/%s-%s.pom",
                   strings.ReplaceAll(group, ".", "/"), artifact, version, artifact, version)
               resp, err := http.Get(url)
@@ -67,63 +56,39 @@ jobs:
                   return "Unknown", nil
               }
 
-              var pom struct {
-                  Licenses []struct {
-                      Name string ` + "`xml:\"name\"`" + `
-                  } ` + "`xml:\"licenses>license\"`" + `
-              }
-              if err := json.NewDecoder(resp.Body).Decode(&pom); err != nil {
+              var pom POM
+              decoder := xml.NewDecoder(resp.Body)
+              if err := decoder.Decode(&pom); err != nil {
                   return "Unknown", err
               }
+
               if len(pom.Licenses) > 0 {
                   return pom.Licenses[0].Name, nil
               }
               return "Unknown", nil
           }
 
-          func generateHTMLReport(dependencies []Dependency, outputFile string) error {
-              file, err := os.Create(outputFile)
-              if err != nil {
-                  return err
-              }
-              defer file.Close()
-
-              _, err = file.WriteString("<html><body><table>")
-              if err != nil {
-                  return err
-              }
-
-              for _, dep := range dependencies {
-                  class := "non-copyleft"
-                  if isCopyleftLicense(dep.License) {
-                      class = "copyleft"
-                  }
-                  row := fmt.Sprintf("<tr class='%s'><td>%s</td><td>%s</td></tr>", class, dep.Name, dep.License)
-                  _, err := file.WriteString(row)
-                  if err != nil {
-                      return err
-                  }
-              }
-
-              _, err = file.WriteString("</table></body></html>")
-              return err
-          }
-
           func main() {
-              dependencies := []Dependency{
-                  {"com.squareup.retrofit2:retrofit:2.9.0", "Apache-2.0"},
-                  {"com.example:unknown:1.0.0", "Unknown"},
+              licenses := []struct {
+                  Group    string
+                  Artifact string
+                  Version  string
+              }{
+                  {"com.squareup.retrofit2", "retrofit", "2.9.0"},
+                  {"com.example", "unknown", "1.0.0"},
               }
 
-              err := generateHTMLReport(dependencies, "dependency-report.html")
-              if err != nil {
-                  fmt.Fprintf(os.Stderr, "Error generating report: %v\n", err)
-                  os.Exit(1)
+              for _, license := range licenses {
+                  name, err := fetchLicenseFromMaven(license.Group, license.Artifact, license.Version)
+                  if err != nil {
+                      fmt.Printf("Error fetching license for %s:%s:%s - %v\n", license.Group, license.Artifact, license.Version, err)
+                  } else {
+                      fmt.Printf("Dependency: %s:%s:%s - License: %s\n", license.Group, license.Artifact, license.Version, name)
+                  }
               }
-              fmt.Println("Report generated: dependency-report.html")
           }
           EOF
-          # Initialize Go module and build binary
+          # Initialize Go module and build the binary
           go mod init license-checker
           go mod tidy
           go build -o ../kotlin_checker
@@ -135,5 +100,5 @@ jobs:
       - name: Upload License Report
         uses: actions/upload-artifact@v3
         with:
-          name: dependency-license-report
+          name: kotlin-license-report
           path: dependency-report.html
