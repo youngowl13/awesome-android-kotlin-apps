@@ -177,6 +177,7 @@ jobs:
           }
           EOF
 
+      # Step 5: Upload the generated HTML report as an artifact
       - name: Upload license report artifact
         uses: actions/upload-artifact@v4
         with:
