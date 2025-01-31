@@ -15,6 +15,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Debug - Show repository structure
+        run: |
+          echo "📂 Repository structure:"
+          find . -type d -not -path './.git*' -print
+          echo "🔍 TOML files found:"
+          find . -name "*.toml" -exec echo "Found: {}" \;
 
       - name: Determine latest Go version
         id: get_go_version
@@ -61,20 +70,20 @@ jobs:
             var found string
             err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
                 if err != nil {
-                    return err // Handle errors during traversal
+                    return err
                 }
                 if d.IsDir() && d.Name() == ".git" {
-                    return filepath.SkipDir // Skip the .git directory
+                    return filepath.SkipDir
                 }
                 if !d.IsDir() && strings.HasSuffix(d.Name(), ".toml") {
                     found = path
-                    return filepath.SkipAll // Stop walking after finding the first .toml file
+                    return filepath.SkipAll
                 }
                 return nil
             })
 
             if found == "" {
-              return "", fmt.Errorf("no .toml file found in any directory of the repository")
+              return "", fmt.Errorf("no .toml file found in repository")
             }
             return found, err
           }
@@ -105,7 +114,7 @@ jobs:
               name, _ := lib["name"].(string)
               versionRef, _ := lib["version.ref"].(string)
               version, _ := versions[versionRef].(string)
-              dependencies[filepath.Join(group, name)] = version // Use filepath.Join
+              dependencies[filepath.Join(group, name)] = version
             }
 
             return dependencies, nil
@@ -132,7 +141,7 @@ jobs:
           }
 
           func getLicenseInfo(dependency, version string) (string, string) {
-            parts := strings.Split(dependency, ":")
+            parts := strings.Split(dependency, string(filepath.Separator))
             if len(parts) != 2 {
               return "Unknown", fmt.Sprintf("https://www.google.com/search?q=%s+%s+license", dependency, version)
             }
@@ -146,8 +155,8 @@ jobs:
           }
 
           func generateHTMLReport(dependencies map[string]string) error {
-            os.MkdirAll("./license-checker", os.ModePerm)
-            reportPath := "./license-checker/license-report.html"
+            os.MkdirAll("license-checker", os.ModePerm)
+            reportPath := "license-checker/license-report.html"
 
             html := `<!DOCTYPE html>
             <html>
@@ -155,11 +164,16 @@ jobs:
             <body>
               <h1>Dependency License Report</h1>
               <table border='1'>
-                <tr><th>Dependency</th><th>Version</th><th>License</th><th>License URL</th></tr>
-            `
+                <tr><th>Dependency</th><th>Version</th><th>License</th><th>License URL</th></tr>`
+            
             for dep, version := range dependencies {
               license, url := getLicenseInfo(dep, version)
-              html += fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td><td><a href='%s'>%s</a></td></tr>", dep, version, license, url, url)
+              html += fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td><td><a href='%s'>%s</a></td></tr>", 
+                strings.ReplaceAll(dep, string(filepath.Separator), ":"), 
+                version, 
+                license, 
+                url, 
+                url)
             }
             html += "</table></body></html>"
 
@@ -172,16 +186,19 @@ jobs:
               fmt.Println("Error finding TOML file:", err)
               os.Exit(1)
             }
+            fmt.Printf("🔍 Found TOML file at: %s\n", tomlFile)
+            
             dependencies, err := parseTOMLFile(tomlFile)
             if err != nil {
               fmt.Println("Error parsing TOML file:", err)
               os.Exit(1)
             }
+            
             if err := generateHTMLReport(dependencies); err != nil {
-              fmt.Println("Error writing HTML report:", err)
+              fmt.Println("Error generating report:", err)
               os.Exit(1)
             }
-            fmt.Println("✅ License report successfully generated at ./license-checker/license-report.html")
+            fmt.Println("✅ Report generated successfully")
           }
           EOF
 
@@ -190,16 +207,28 @@ jobs:
           cd license-checker
           go mod init license-checker
           go mod tidy
-          go build license-checker.go
-          ./license-checker
+          go build -v -o license-checker-bin
+          ./license-checker-bin
 
-      - name: Verify License Report Location
+      - name: Debug - Verify report generation
         run: |
-          echo "🔍 Checking if license report exists..."
-          ls -l ./license-checker || echo "❌ License report not found!"
+          echo "📄 License report verification:"
+          ls -lha ./license-checker
+          if [ -f ./license-checker/license-report.html ]; then
+            echo "✅ Report exists"
+            echo "First 3 lines of report:"
+            head -n 3 ./license-checker/license-report.html
+          else
+            echo "❌ Report file missing!"
+            exit 1
+          fi
 
       - name: Upload license report artifact
         uses: actions/upload-artifact@v4
         with:
           name: license-report
           path: ./license-checker/license-report.html
+          retention-days: 7
+
+      - name: Final check
+        run: echo "🏁 Workflow completed successfully"
