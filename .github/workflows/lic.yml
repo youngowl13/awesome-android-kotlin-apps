@@ -58,27 +58,25 @@ jobs:
           }
 
           func findTOMLFile(root string) (string, error) {
-            var tomlFile string
+            var found string
             err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-              if err != nil {
-                return err
-              }
-              
-              // Skip the .git directory
-              if d.IsDir() && d.Name() == ".git" {
-                return filepath.SkipDir
-              }
-
-              if !d.IsDir() && strings.HasSuffix(d.Name(), ".toml") {
-                tomlFile = path
-                return filepath.SkipAll
-              }
-              return nil
+                if err != nil {
+                    return err // Handle errors during traversal
+                }
+                if d.IsDir() && d.Name() == ".git" {
+                    return filepath.SkipDir // Skip the .git directory
+                }
+                if !d.IsDir() && strings.HasSuffix(d.Name(), ".toml") {
+                    found = path
+                    return filepath.SkipAll // Stop walking after finding the first .toml file
+                }
+                return nil
             })
-            if tomlFile == "" {
+
+            if found == "" {
               return "", fmt.Errorf("no .toml file found in any directory of the repository")
             }
-            return tomlFile, err
+            return found, err
           }
 
           func parseTOMLFile(filePath string) (map[string]string, error) {
@@ -107,7 +105,7 @@ jobs:
               name, _ := lib["name"].(string)
               versionRef, _ := lib["version.ref"].(string)
               version, _ := versions[versionRef].(string)
-              dependencies[filepath.Join(group, name)] = version
+              dependencies[filepath.Join(group, name)] = version // Use filepath.Join
             }
 
             return dependencies, nil
