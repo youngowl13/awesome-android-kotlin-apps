@@ -13,24 +13,20 @@ jobs:
   check-licenses:
     runs-on: ubuntu-latest
     steps:
-      # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Determine the latest Go version dynamically
       - name: Determine latest Go version
         id: get_go_version
         run: |
           latest_go_version=$(curl -s https://go.dev/VERSION?m=text | sed 's/^go//' | head -n 1)
           echo "go-version=$latest_go_version" >> "$GITHUB_OUTPUT"
 
-      # Step 3: Set up the Go environment
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: ${{ steps.get_go_version.outputs.go-version }}
 
-      # Step 4: Create directory and add Go code for license checker
       - name: Create license checker directory and Go code
         run: |
           mkdir -p license-checker
@@ -64,16 +60,16 @@ jobs:
             var tomlFile string
             err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
               if err != nil {
-                return err
+                return err 
               }
               if !info.IsDir() && strings.HasSuffix(info.Name(), ".toml") {
                 tomlFile = path
-                return filepath.SkipDir
+                return filepath.SkipAll
               }
               return nil
             })
             if tomlFile == "" {
-              return "", fmt.Errorf("no .toml file found")
+              return "", fmt.Errorf("no .toml file found in any directory of the repository")
             }
             return tomlFile, err
           }
@@ -184,7 +180,6 @@ jobs:
           }
           EOF
 
-      # Step 5: Initialize Go module, download dependencies, compile, and run
       - name: Compile and run license checker
         run: |
           cd license-checker
@@ -193,13 +188,11 @@ jobs:
           go build license-checker.go
           ./license-checker
 
-      # Verify if license report exists
       - name: Verify License Report Location
         run: |
           echo "🔍 Checking if license report exists..."
           ls -l ./license-checker || echo "❌ License report not found!"
 
-      # Upload the license report
       - name: Upload license report artifact
         uses: actions/upload-artifact@v4
         with:
