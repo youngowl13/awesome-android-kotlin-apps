@@ -37,6 +37,7 @@ jobs:
           import (
             "encoding/xml"
             "fmt"
+            "io/fs"
             "io/ioutil"
             "net/http"
             "os"
@@ -58,11 +59,11 @@ jobs:
 
           func findTOMLFile(root string) (string, error) {
             var tomlFile string
-            err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+            err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
               if err != nil {
-                return err 
+                return err
               }
-              if !info.IsDir() && strings.HasSuffix(info.Name(), ".toml") {
+              if !d.IsDir() && strings.HasSuffix(d.Name(), ".toml") {
                 tomlFile = path
                 return filepath.SkipAll
               }
