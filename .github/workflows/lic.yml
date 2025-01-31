@@ -63,6 +63,12 @@ jobs:
               if err != nil {
                 return err
               }
+              
+              // Skip the .git directory
+              if d.IsDir() && d.Name() == ".git" {
+                return filepath.SkipDir
+              }
+
               if !d.IsDir() && strings.HasSuffix(d.Name(), ".toml") {
                 tomlFile = path
                 return filepath.SkipAll
@@ -101,7 +107,7 @@ jobs:
               name, _ := lib["name"].(string)
               versionRef, _ := lib["version.ref"].(string)
               version, _ := versions[versionRef].(string)
-              dependencies[fmt.Sprintf("%s:%s", group, name)] = version
+              dependencies[filepath.Join(group, name)] = version
             }
 
             return dependencies, nil
