@@ -144,7 +144,10 @@ jobs:
             return pom.Licenses[0].Name, pom.Licenses[0].URL
           }
 
-          func generateHTMLReport(dependencies map[string]string) {
+          func generateHTMLReport(dependencies map[string]string) error {
+            os.MkdirAll("./license-checker", os.ModePerm)
+            reportPath := "./license-checker/license-report.html"
+
             html := `<!DOCTYPE html>
               <html>
               <head><title>Kotlin Dependency License Report</title></head>
@@ -158,7 +161,8 @@ jobs:
               html += fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td><td><a href='%s'>%s</a></td></tr>", dep, version, license, url, url)
             }
             html += "</table></body></html>"
-            ioutil.WriteFile("license-checker/license-report.html", []byte(html), 0644)
+
+            return ioutil.WriteFile(reportPath, []byte(html), 0644)
           }
 
           func main() {
@@ -172,16 +176,21 @@ jobs:
               fmt.Println("Error parsing TOML file:", err)
               os.Exit(1)
             }
-            generateHTMLReport(dependencies)
+            if err := generateHTMLReport(dependencies); err != nil {
+              fmt.Println("Error writing HTML report:", err)
+              os.Exit(1)
+            }
             fmt.Println("✅ License report successfully generated at ./license-checker/license-report.html")
           }
           EOF
 
+      # Verify if license report exists
       - name: Verify License Report Location
         run: |
           echo "🔍 Checking if license report exists..."
-          ls -l ./license-checker
+          ls -l ./license-checker || echo "❌ License report not found!"
 
+      # Upload the license report
       - name: Upload license report artifact
         uses: actions/upload-artifact@v4
         with:
